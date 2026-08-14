@@ -67,8 +67,7 @@ type FrontMatter struct {
 
 var (
 	feedURL     = flag.String("feed", "https://blog.breyer.berlin/feed/", "RSS feed URL or file path")
-	outDir      = flag.String("out", "content/posts", "Output directory for Hugo Markdown files")
-	staticDir   = flag.String("static", "static", "Hugo static directory (root of images/galleries)")
+	outDir      = flag.String("out", "posts", "Output directory for Hugo page bundles")
 	timezone    = flag.String("tz", "Europe/Berlin", "IANA timezone for front matter dates, e.g. Europe/Berlin")
 	limitItems  = flag.Int("limit", 1, "Process only the first N items (0 = all)")
 	concurrency = flag.Int("concurrency", 6, "Concurrent image download workers")
@@ -76,24 +75,20 @@ var (
 	retries     = flag.Int("retries", 3, "Number of download retries on failure")
 	perHost     = flag.Int("perhost", 4, "Max concurrent downloads per host")
 	verbose     = flag.Bool("v", true, "Verbose output")
-	clean       = flag.Bool("clean", true, "Delete output folders (content/posts and static/images|galleries) before run")
+	clean       = flag.Bool("clean", true, "Delete the output folder before run")
 )
 
 func main() {
 	flag.Parse()
 
 	if *clean {
-		if err := cleanOutput(*outDir, *staticDir); err != nil {
+		if err := cleanOutput(*outDir); err != nil {
 			log.Fatalf("clean output: %v", err)
 		}
 	}
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		log.Fatalf("create out dir: %v", err)
 	}
-	if err := os.MkdirAll(*staticDir, 0o755); err != nil {
-		log.Fatalf("create static dir: %v", err)
-	}
-
 	rss, err := loadRSS(*feedURL)
 	if err != nil {
 		log.Fatalf("load RSS: %v", err)
@@ -123,18 +118,9 @@ func main() {
 	dl.Wait()
 }
 
-func cleanOutput(contentOut, staticRoot string) error {
-	// Remove and recreate content/posts (or specified out dir)
+func cleanOutput(contentOut string) error {
 	if err := removeAndRecreate(contentOut); err != nil {
 		return fmt.Errorf("reset out dir: %w", err)
-	}
-	// Ensure static root exists (don’t nuke the whole static dir)
-	if err := os.MkdirAll(staticRoot, 0o755); err != nil {
-		return fmt.Errorf("ensure static root: %w", err)
-	}
-	// Remove and recreate the subfolder we manage: static/media
-	if err := removeAndRecreate(filepath.Join(staticRoot, "media")); err != nil {
-		return fmt.Errorf("reset static/media: %w", err)
 	}
 	return nil
 }
@@ -383,7 +369,7 @@ func processItem(item Item, loc *time.Location, dl *downloader) error {
 	}
 
 	if *verbose {
-		log.Printf("✓ %s -> %s.md (%d chars)", item.Title, slug, len(bodyMD))
+		log.Printf("✓ %s -> %s/index.md (%d chars)", item.Title, slug, len(bodyMD))
 	}
 	return nil
 }
@@ -400,7 +386,7 @@ func writeMarkdownFile(slug string, fm FrontMatter, body string) error {
 	buf.WriteString(strings.TrimSpace(body))
 	buf.WriteString("\n")
 
-	outPath := filepath.Join(*outDir, slug+".md")
+	outPath := filepath.Join(*outDir, slug, "index.md")
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return err
 	}
@@ -683,8 +669,8 @@ func rewriteAndDownloadImages(html string, slug string, dl *downloader) (string,
 		// 2) Auf Originaldatei ohne -WxH / -scaled verweisen
 		origURL := toOriginalURL(best)
 
-		base := filepath.Join(*staticDir, "media", slug)
-		relBase := filepath.ToSlash(path.Join("/media", slug))
+		base := filepath.Join(*outDir, slug, "gallery")
+		relBase := "gallery"
 		_ = os.MkdirAll(base, 0o755)
 
 		// Assign stable, per-post index for this original URL based on first mention
@@ -712,7 +698,7 @@ func rewriteAndDownloadImages(html string, slug string, dl *downloader) (string,
 			a.SetAttr("href", rel)
 		}
 	})
-	// Handle HTML5 videos: download to static/videos/$slug and rewrite src to local path
+	// Store HTML5 videos in the page bundle gallery and rewrite src to a relative path.
 	doc.Find("video").Each(func(i int, v *goquery.Selection) {
 		src, _ := v.Attr("src")
 		// Some WP videos use <source src> children instead of video@src
@@ -725,8 +711,8 @@ func rewriteAndDownloadImages(html string, slug string, dl *downloader) (string,
 			return
 		}
 
-		base := filepath.Join(*staticDir, "media", slug)
-		relBase := filepath.ToSlash(path.Join("/media", slug))
+		base := filepath.Join(*outDir, slug, "gallery")
+		relBase := "gallery"
 		_ = os.MkdirAll(base, 0o755)
 
 		filename := filenameFromURL(src)
